@@ -30,7 +30,7 @@ This creates a `lambda.zip` file, which you can upload in the Lambda Console.
 ### AWS infrastructure
 
 ```mermaid
-graph TR;
+graph LR;
     EventBridge-->Lambda;
     Lambda-->SES;
 ```
