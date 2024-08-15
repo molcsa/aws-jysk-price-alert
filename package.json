@@ -1,0 +1,17 @@
+{
+  "name": "aws-jysk-price-alert",
+  "version": "1.0.0",
+  "description": "Price alert function for watching products on JYSK furniture store's website",
+  "main": "index.js",
+  "scripts": {
+    "build": "zip -r lambda.zip . -x .gitignore README.md"
+  },
+  "author": "molcsa",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.4",
+    "cheerio": "^1.0.0"
+  }
+}
