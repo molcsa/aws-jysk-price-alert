@@ -1,8 +1,16 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { SESClient, SendEmailCommand } = require('@aws-sdk/client-ses');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  UpdateCommand,
+} = require('@aws-sdk/lib-dynamodb');
 
 const sesClient = new SESClient({ region: process.env.AWS_REGION });
+const dbClient = new DynamoDBClient({ region: process.env.AWS_REGION });
+const dynamodb = DynamoDBDocumentClient.from(dbClient); // DocumentClient wrapper for easier interactions
 
 const sendEmail = async (
   toAddress,
@@ -38,8 +46,8 @@ const sendEmail = async (
 const scrapePriceAndName = async (url) => {
   try {
     const response = await axios.get(url);
-    const data = response.data;
-    const $ = cheerio.load(data);
+    const rawData = response.data;
+    const $ = cheerio.load(rawData);
     const priceString = $('.ssr-product-price__value').text();
     const price = parseFloat(priceString.match(/^[0-9]+/)[0]);
     const productName = $('.product-sumbox-series').text();
@@ -51,23 +59,58 @@ const scrapePriceAndName = async (url) => {
   }
 };
 
-exports.handler = (event) => {
-  if (!Array.isArray(event.products)) {
-    console.error(
-      'event.products is not an array, check event params! Exiting...'
+const getProducts = async () => {
+  try {
+    const scanData = await dynamodb.send(
+      new ScanCommand({ TableName: process.env.DB_TABLE_NAME })
     );
+    return scanData.Items;
+  } catch (err) {
+    console.error(err);
+    return [];
+  }
+};
+
+const setEmailSent = async (url) => {
+  const updateParams = {
+    TableName: process.env.DB_TABLE_NAME,
+    Key: {
+      productUrl: url,
+    },
+    UpdateExpression: 'set emailSent = :emailSent', // The expression to update the emailSent field
+    ExpressionAttributeValues: {
+      ':emailSent': true, // Set the value of emailSent to true
+    },
+    ReturnValues: 'UPDATED_NEW', // Returns only the updated attributes
+  };
+
+  try {
+    const result = await dynamodb.send(new UpdateCommand(updateParams));
+    console.log('Updated emailSent field.');
+  } catch (err) {
+    console.error('Error updating emailSent field:', err);
+  }
+};
+
+exports.handler = async (event) => {
+  const products = await getProducts();
+  if (products.length === 0) {
+    console.error('No products found in the database. Exiting...');
     return;
   }
 
-  event.products.forEach(async ({ url, targetPrice }) => {
-    const { price, productName } = await scrapePriceAndName(url);
-    const shouldSendEmail = Boolean(price && price < parseFloat(targetPrice));
+  for (const { productUrl, targetPrice, emailSent = false } of products) {
+    const { price, productName } = await scrapePriceAndName(productUrl);
+    const shouldSendEmail =
+      Boolean(price && price < parseFloat(targetPrice)) && !emailSent;
 
     if (!shouldSendEmail) {
       console.log(
-        `Not sending email for ${productName}, because price is ${price} and target price is ${targetPrice}`
+        `Not sending email for ${productName} (price is ${price}, target price is ${targetPrice}, email was ${
+          emailSent ? 'already' : 'not yet'
+        } sent)`
       );
-      return;
+      continue;
     }
 
     const toAddress = process.env.TO_EMAIL;
@@ -79,12 +122,12 @@ exports.handler = (event) => {
           <h1> Jysk árfigyelő értesítés </h1>
           <p style="font-size: 16px;">
             A figyelt 
-            <a href="${url}" target="_blank" style="color:#143c8a; font-weight: bold;">${productName}</a> 
+            <a href="${productUrl}" target="_blank" style="color:#143c8a; font-weight: bold;">${productName}</a> 
             termék ára a beállított érték (${targetPrice} Ft) alá csökkent.
             <br>
             Jelenlegi ára: <b>${price} Ft</b>
           </p>
-          <a href="${url}" target="_blank" style="
+          <a href="${productUrl}" target="_blank" style="
             display: inline-block;
             background-color: #143c8a;
             color: #fff;
@@ -102,7 +145,7 @@ exports.handler = (event) => {
       </html>      
     `;
     // For email clients which don't support HTML
-    const textBody = `A megfigyelt ${productName} termék (${url}) ára a beállított érték (${targetPrice} Ft) alá csökkent. Jelenlegi ára: ${price} Ft`;
+    const textBody = `A megfigyelt ${productName} termék (${productUrl}) ára a beállított érték (${targetPrice} Ft) alá csökkent. Jelenlegi ára: ${price} Ft`;
 
     const result = await sendEmail(
       toAddress,
@@ -115,7 +158,8 @@ exports.handler = (event) => {
     if (result instanceof Error) {
       console.error(`Error sending email for ${productName}: `, result);
     } else {
-      console.log(`Email for ${productName} sent successfully: `, result);
+      console.log(`Email for ${productName} sent successfully.`);
+      await setEmailSent(productUrl);
     }
-  });
+  }
 };
