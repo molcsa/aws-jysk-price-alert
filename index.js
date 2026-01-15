@@ -48,7 +48,7 @@ const scrapePriceAndName = async (url) => {
     const response = await axios.get(url);
     const rawData = response.data;
     const $ = cheerio.load(rawData);
-    const priceString = $('.ssr-product-price__value').text();
+    const priceString = $('.product-price-value').text();
     const price = parseFloat(priceString.match(/^[0-9]+/)[0]);
     const productName = $('.product-sumbox-series').text();
     console.log(`Current price of ${productName}: ${priceString}`);
@@ -99,16 +99,20 @@ exports.handler = async (event) => {
     return;
   }
 
+  console.log(`Found ${products.length} products in the database.`);
+
   for (const { productUrl, targetPrice, emailSent = false } of products) {
+    if (emailSent) {
+      console.log(`Email already sent for ${productUrl}, skipping...`);
+      return;
+    }
+
     const { price, productName } = await scrapePriceAndName(productUrl);
-    const shouldSendEmail =
-      Boolean(price && price < parseFloat(targetPrice)) && !emailSent;
+    const shouldSendEmail = Boolean(price && price < parseFloat(targetPrice));
 
     if (!shouldSendEmail) {
       console.log(
-        `Not sending email for ${productName} (price is ${price}, target price is ${targetPrice}, email was ${
-          emailSent ? 'already' : 'not yet'
-        } sent)`
+        `Skipping sending email for ${productName} (price is ${price}, target price is ${targetPrice})`
       );
       continue;
     }
